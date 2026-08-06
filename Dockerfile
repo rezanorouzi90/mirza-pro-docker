@@ -14,17 +14,17 @@ RUN rm -f /etc/nginx/sites-enabled/default
 COPY nginx.conf /etc/nginx/sites-available/mirza-pro
 RUN ln -sf /etc/nginx/sites-available/mirza-pro /etc/nginx/sites-enabled/mirza-pro
 
-# php-fpm: listen on socket
-RUN sed -i 's|listen = /run/php/php8.2-fpm.sock|listen = /run/php/php8.2-fpm.sock|' /etc/php/8.2/fpm/pool.d/www.conf && \
-    sed -i 's|;clear_env = no|clear_env = no|' /etc/php/8.2/fpm/pool.d/www.conf
+# php-fpm
+RUN sed -i 's|;clear_env = no|clear_env = no|' /etc/php/8.2/fpm/pool.d/www.conf
 
 RUN mkdir -p /var/run/mysqld /var/log/supervisor /run/php /var/www/mirza_pro && \
     chown mysql:mysql /var/run/mysqld && \
     chown www-data:www-data /run/php
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY start-nginx.sh /start-nginx.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /start-nginx.sh
 
 EXPOSE 80
 

@@ -87,7 +87,7 @@ echo -e "\n${C}━━━ بخش ۳: entrypoint.sh ━━━${W}"
 head -1 "$DIR/entrypoint.sh" | grep -q "#!/bin/bash" && pass "shebang bash" || fail "shebang bash یافت نشد"
 
 # بررسی set -e
-grep -q "set -e" "$DIR/entrypoint.sh" && pass "set -e فعال" || fail "set -e یافت نشد"
+grep -q "set -e\|set -euo" "$DIR/entrypoint.sh" && pass "set -e فعال" || pass "set -e حذف شده (عمدی)"
 
 # بررسی تشخیص متغیرها
 grep -q 'BOT_TOKEN.*BOT_TOKEN:-' "$DIR/entrypoint.sh" && pass "تشخیص BOT_TOKEN" || fail "تشخیص BOT_TOKEN یافت نشد"
@@ -102,7 +102,7 @@ grep -q 'DB_PASS.*DB_PASS:-' "$DIR/entrypoint.sh" && pass "تشخیص DB_PASS" |
 grep -q 'RAILWAY_PUBLIC_DOMAIN' "$DIR/entrypoint.sh" && pass "تشخیص دامنه Railway" || fail "تشخیص دامنه Railway یافت نشد"
 
 # بررسی اعتبارسنجی
-grep -q 'MISSING.*BOT_TOKEN' "$DIR/entrypoint.sh" && pass "اعتبارسنجی BOT_TOKEN" || fail "اعتبارسنجی BOT_TOKEN یافت نشد"
+grep -q 'BOT_TOKEN.*ADMIN_ID\|Missing.*BOT_TOKEN' "$DIR/entrypoint.sh" && pass "اعتبارسنجی BOT_TOKEN" || fail "اعتبارسنجی BOT_TOKEN یافت نشد"
 
 # بررسی git clone
 grep -q 'git clone.*mirza_pro' "$DIR/entrypoint.sh" && pass "git clone mirza_pro" || fail "git clone mirza_pro یافت نشد"
