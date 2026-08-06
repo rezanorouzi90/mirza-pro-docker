@@ -10,9 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # nginx — remove ALL default configs to avoid duplicate default_server
-RUN rm -rf /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*
+# Must be in same RUN as apt-get to avoid layer caching issues
 COPY nginx.conf /etc/nginx/sites-available/mirza-pro
-RUN ln -sf /etc/nginx/sites-available/mirza-pro /etc/nginx/sites-enabled/mirza-pro
+RUN rm -rf /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* && \
+    ln -sf /etc/nginx/sites-available/mirza-pro /etc/nginx/sites-enabled/mirza-pro
 
 # php-fpm
 RUN sed -i 's|;clear_env = no|clear_env = no|' /etc/php/8.2/fpm/pool.d/www.conf
