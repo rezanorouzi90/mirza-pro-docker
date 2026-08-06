@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Mirza Pro — Docker Entrypoint
-# تشخیص خودکار متغیرها + راه‌اندازی کامل
+# Mirza Pro — Docker Entrypoint v3
+# تشخیص خودکار متغیرها + راه‌اندازی کامل بدون باگ
 # ============================================================
 set -euo pipefail
 
@@ -10,6 +10,13 @@ log()  { echo -e "${G}[✔]${W} $1"; }
 warn() { echo -e "${Y}[⚠]${W} $1"; }
 err()  { echo -e "${R}[✘]${W} $1"; }
 info() { echo -e "${B}[i]${W} $1"; }
+
+# ── جلوگیری از اجرای مجدد ──
+GUARD="/var/run/mirza-setup-done"
+if [ -f "$GUARD" ]; then
+    info "Setup قبلاً انجام شده — فقط سرویس‌ها"
+    exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+fi
 
 # ============================================================
 #  ۱. تشخیص متغیرها
@@ -21,28 +28,23 @@ DOMAIN="${DOMAIN:-}"
 DB_NAME="${DB_NAME:-mirza_pro}"
 DB_USER="${DB_USER:-mirza_user}"
 DB_PASS="${DB_PASS:-}"
-DB_HOST="${DB_HOST:-127.0.0.1}"
 PORT="${PORT:-80}"
 
-# Railway domain
 if [ -z "$DOMAIN" ] && [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
     DOMAIN="$RAILWAY_PUBLIC_DOMAIN"
-    info "دامنه Railway شناسایی شد: $DOMAIN"
 fi
 
-# Auto-generate DB password
 if [ -z "$DB_PASS" ]; then
     DB_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c -24)
 fi
 
-# Validate required vars
 MISSING=""
 [ -z "$BOT_TOKEN" ]   && MISSING="$MISSING BOT_TOKEN"
 [ -z "$ADMIN_ID" ]    && MISSING="$MISSING ADMIN_ID"
 [ -z "$BOT_USERNAME" ] && MISSING="$MISSING BOT_USERNAME"
 
 if [ -n "$MISSING" ]; then
-    err "متغیرهای اجباری وارد نشده:$MISSING"
+    err "متغیرهای اجباری:$MISSING"
     exit 1
 fi
 
@@ -50,7 +52,6 @@ info "BOT_TOKEN:   ${BOT_TOKEN:0:10}..."
 info "ADMIN_ID:    $ADMIN_ID"
 info "BOT_USERNAME: @$BOT_USERNAME"
 info "DOMAIN:      ${DOMAIN:-'(خودکار)'}"
-info "DB_NAME:     $DB_NAME"
 
 # ============================================================
 #  ۲. کلون Mirza Pro
@@ -61,23 +62,21 @@ if [ ! -f "$MIRZA_DIR/index.php" ]; then
     info "دانلود Mirza Pro..."
     rm -rf "$MIRZA_DIR"
     git clone --depth 1 https://github.com/mahdiMGF2/mirza_pro.git "$MIRZA_DIR" 2>/dev/null || {
-        err "خطا در دانلود Mirza Pro"
+        err "خطا در دانلود"
         exit 1
     }
     log "Mirza Pro دانلود شد"
-else
-    info "Mirza Pro از قبل وجود دارد"
 fi
 
 chown -R www-data:www-data "$MIRZA_DIR"
 chmod -R 755 "$MIRZA_DIR"
 
 # ============================================================
-#  ۳. راه‌اندازی MariaDB (skip-grant-tables برای setup)
+#  ۳. MariaDB — بدون skip-grant-tables
 # ============================================================
 info "راه‌اندازی MariaDB..."
 
-# Init DB if empty
+# Init فقط اگر خالی باشه
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     if command -v mariadb-install-db &>/dev/null; then
         mariadb-install-db --user=mysql --datadir=/var/lib/mysql > /dev/null 2>&1
@@ -90,17 +89,16 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     log "MariaDB اینیشیالایز شد"
 fi
 
-# Start with skip-grant-tables for initial setup (no auth needed)
+# استارت عادی — بدون skip-grant-tables
 mysqld --user=mysql --datadir=/var/lib/mysql \
-    --skip-grant-tables --skip-networking=0 \
-    --port=3306 --bind-address=127.0.0.1 &
+    --bind-address=127.0.0.1 --port=3306 &
 MYSQL_PID=$!
 
-# Wait for ready — use socket, NOT TCP
-info "صبر برای آماده شدن MariaDB..."
+# صبر برای آماده شدن — اتصال از طریق SOCKET (نه TCP)
+info "صبر برای MariaDB..."
 READY=0
 for i in $(seq 1 30); do
-    if mysqladmin ping --protocol=socket --silent 2>/dev/null; then
+    if mysqladmin ping --protocol=socket 2>/dev/null; then
         READY=1
         break
     fi
@@ -114,11 +112,11 @@ fi
 log "MariaDB آماده شد"
 
 # ============================================================
-#  ۴. ساخت دیتابیس و کاربر (با socket connection)
+#  ۴. ساخت دیتابیس — فقط SOCKET connection
 # ============================================================
-info "ساخت دیتابیس و کاربر..."
+info "ساخت دیتابیس..."
 
-# Use socket connection for root (skip-grant-tables means no auth needed)
+# اتصال از طریق socket — root روی Debian با unix_socket auth کار می‌کنه
 mysql --protocol=socket -u root <<SQLEOF
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -128,7 +126,7 @@ GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQLEOF
 
-log "دیتابیس '$DB_NAME' و کاربر '$DB_USER' ساخته شد"
+log "دیتابیس '$DB_NAME' ساخته شد"
 
 # ============================================================
 #  ۵. ساخت جداول
@@ -136,23 +134,20 @@ log "دیتابیس '$DB_NAME' و کاربر '$DB_USER' ساخته شد"
 if [ -f "$MIRZA_DIR/table.php" ]; then
     info "ساخت جداول..."
     cd "$MIRZA_DIR"
-    if php table.php > /dev/null 2>&1; then
-        log "جداول ساخته شد"
-    else
-        warn "جداول از قبل وجود دارند"
-    fi
+    php table.php > /dev/null 2>&1 && log "جداول ساخته شد" || warn "جداول از قبل وجود دارند"
 fi
 
 # ============================================================
-#  ۶. ساخت config.php (با Python — بدون heredoc bug)
+#  ۶. config.php — با Python
 # ============================================================
 info "ساخت config.php..."
 
 DOMAIN_VAL=""
 [ -n "$DOMAIN" ] && DOMAIN_VAL="https://$DOMAIN"
 export _DOMAIN_VAL="$DOMAIN_VAL"
+export BOT_TOKEN ADMIN_ID BOT_USERNAME DB_NAME DB_USER DB_PASS DB_HOST="127.0.0.1"
 
-python3 << PYEOF > "$MIRZA_DIR/config.php"
+python3 << 'PYEOF' > "$MIRZA_DIR/config.php"
 import os
 
 bot_token  = os.environ['BOT_TOKEN']
@@ -192,22 +187,18 @@ print(f"\\$usernamebot  = '{bot_user}';")
 print('?>')
 PYEOF
 
-export _DOMAIN_VAL="$DOMAIN_VAL"
-
 chown www-data:www-data "$MIRZA_DIR/config.php"
 chmod 640 "$MIRZA_DIR/config.php"
 log "config.php ساخته شد"
 
 # ============================================================
-#  ۷. تنظیم Apache
+#  ۷. Apache
 # ============================================================
 info "تنظیم Apache..."
 
-SERVER_NAME="${DOMAIN:-localhost}"
-
 cat > /etc/apache2/sites-available/mirza-pro.conf << APACHEEOF
 <VirtualHost *:80>
-    ServerName ${SERVER_NAME}
+    ServerName ${DOMAIN:-localhost}
     DocumentRoot ${MIRZA_DIR}
     <Directory ${MIRZA_DIR}>
         Options Indexes FollowSymLinks
@@ -226,30 +217,24 @@ log "Apache تنظیم شد"
 # ============================================================
 #  ۸. رفع خطاهای Mirza Pro
 # ============================================================
-info "رفع خطاهای احتمالی..."
-
 if [ -f "$MIRZA_DIR/alireza_single.php" ] && [ ! -f "$MIRZA_DIR/alireza.php" ]; then
     mv "$MIRZA_DIR/alireza_single.php" "$MIRZA_DIR/alireza.php" 2>/dev/null
     sed -i "s|require_once __DIR__ . '/alireza_single.php';|require_once __DIR__ . '/alireza.php';|g" "$MIRZA_DIR/panels.php" 2>/dev/null
 fi
 
 [ ! -f "$MIRZA_DIR/version" ] && echo "3.0" > "$MIRZA_DIR/version"
-
 chown -R www-data:www-data "$MIRZA_DIR"
-find "$MIRZA_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
-find "$MIRZA_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
-chmod 640 "$MIRZA_DIR/config.php"
 
 # ============================================================
-#  ۹. توقف mysqld موقت (supervisord دوباره استارت می‌کنه)
+#  ۹. توقف mysqld موقت
 # ============================================================
-info "توقف mysqld موقت..."
+info "توقف mysqld..."
 kill "$MYSQL_PID" 2>/dev/null || true
 wait "$MYSQL_PID" 2>/dev/null || true
 sleep 2
 
 # ============================================================
-#  ۱۰. Webhook تلگرام
+#  ۱۰. Webhook
 # ============================================================
 if [ -n "$DOMAIN" ]; then
     info "تنظیم Webhook..."
@@ -261,11 +246,11 @@ if [ -n "$DOMAIN" ]; then
         warn "Webhook تنظیم نشد"
     fi
 else
-    warn "DOMAIN نیست — Webhook بعداً تنظیم کنید"
+    warn "DOMAIN نیست — Webhook بعداً"
 fi
 
 # ============================================================
-#  ۱۱. اطلاعات نهایی
+#  ۱۱. اطلاعات
 # ============================================================
 echo ""
 echo -e "${G}╔══════════════════════════════════════════════════╗${W}"
@@ -280,6 +265,7 @@ echo -e "  🔑 DB Pass:   $DB_PASS"
 echo ""
 
 # ============================================================
-#  ۱۲. اجرای Supervisor
+#  ۱۲. علامت اتمام + شروع Supervisor
 # ============================================================
+touch "$GUARD"
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
