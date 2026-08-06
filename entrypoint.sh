@@ -3,7 +3,7 @@
 # Mirza Pro — Docker Entrypoint
 # تشخیص خودکار متغیرها + راه‌اندازی کامل
 # ============================================================
-set -e
+set -euo pipefail
 
 # ── رنگ‌ها ──
 R='\033[1;31m' G='\033[1;32m' Y='\033[1;33m' B='\033[1;34m' C='\033[1;36m' W='\033[0m'
@@ -23,18 +23,27 @@ DOMAIN="${DOMAIN:-}"
 DB_NAME="${DB_NAME:-mirza_pro}"
 DB_USER="${DB_USER:-mirza_user}"
 DB_PASS="${DB_PASS:-}"
-DB_HOST="${DB_HOST:-localhost}"
+DB_HOST="${DB_HOST:-127.0.0.1}"
 
-# تولید رمز دیتابیس اگر وارد نشده
+# ── تشخیص خودکار دامنه Railway ──
+if [ -z "$DOMAIN" ] && [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+    DOMAIN="$RAILWAY_PUBLIC_DOMAIN"
+    info "دامنه Railway شناسایی شد: $DOMAIN"
+fi
+
+# ── تشخیص پورت Railway ──
+PORT="${PORT:-80}"
+
+# ── تولید رمز دیتابیس ──
 if [ -z "$DB_PASS" ]; then
-    DB_PASS=$(openssl rand -base64 24 | tr -d /=+ | cut -c -24)
-    warn "رمز دیتابیس تولید شد: $DB_PASS"
+    DB_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c -24)
+    info "رمز دیتابیس تولید شد: $DB_PASS"
 fi
 
 # ── بررسی متغیرهای اجباری ──
 MISSING=""
-[ -z "$BOT_TOKEN" ]  && MISSING="$MISSING BOT_TOKEN"
-[ -z "$ADMIN_ID" ]   && MISSING="$MISSING ADMIN_ID"
+[ -z "$BOT_TOKEN" ]   && MISSING="$MISSING BOT_TOKEN"
+[ -z "$ADMIN_ID" ]    && MISSING="$MISSING ADMIN_ID"
 [ -z "$BOT_USERNAME" ] && MISSING="$MISSING BOT_USERNAME"
 
 if [ -n "$MISSING" ]; then
@@ -42,36 +51,30 @@ if [ -n "$MISSING" ]; then
     echo ""
     echo -e "${C}نحوه استفاده:${W}"
     echo "  docker run -e BOT_TOKEN=xxx -e ADMIN_ID=123 -e BOT_USERNAME=mybot mirza-pro"
-    echo ""
-    echo -e "${C}یا در docker-compose.yml:${W}"
-    echo "  environment:"
-    echo "    BOT_TOKEN: 'your_token'"
-    echo "    ADMIN_ID: 'your_id'"
-    echo "    BOT_USERNAME: 'your_bot'"
-    echo ""
     exit 1
 fi
 
 info "متغیرها شناسایی شد:"
-info "  BOT_TOKEN:   ${BOT_TOKEN:0:10}..."
-info "  ADMIN_ID:    $ADMIN_ID"
+info "  BOT_TOKEN:    ${BOT_TOKEN:0:10}..."
+info "  ADMIN_ID:     $ADMIN_ID"
 info "  BOT_USERNAME: @$BOT_USERNAME"
-info "  DOMAIN:      ${DOMAIN:-'(تنظیم نشده)'}"
-info "  DB_NAME:     $DB_NAME"
-info "  DB_USER:     $DB_USER"
+info "  DOMAIN:       ${DOMAIN:-'(خودکار)'}"
+info "  DB_NAME:      $DB_NAME"
+info "  DB_USER:      $DB_USER"
+info "  PORT:         $PORT"
 
 # ============================================================
-#  ۲. کلون کردن Mirza Pro (اگر وجود نداره)
+#  ۲. کلون کردن Mirza Pro
 # ============================================================
 MIRZA_DIR="/var/www/mirza_pro"
 
 if [ ! -f "$MIRZA_DIR/index.php" ]; then
     info "دانلود Mirza Pro..."
     rm -rf "$MIRZA_DIR"
-    git clone --depth 1 https://github.com/mahdiMGF2/mirza_pro.git "$MIRZA_DIR" 2>/dev/null || {
+    if ! git clone --depth 1 https://github.com/mahdiMGF2/mirza_pro.git "$MIRZA_DIR" 2>/dev/null; then
         err "خطا در دانلود Mirza Pro"
         exit 1
-    }
+    fi
     log "Mirza Pro دانلود شد"
 else
     info "Mirza Pro از قبل وجود دارد"
@@ -81,85 +84,158 @@ chown -R www-data:www-data "$MIRZA_DIR"
 chmod -R 755 "$MIRZA_DIR"
 
 # ============================================================
-#  ۳. ساخت config.php
-# ============================================================
-info "ساخت config.php..."
-
-cat > "$MIRZA_DIR/config.php" <<CFGEOF
-<?php
-if(!defined("index")) define("index", true);
-
-\$dbname     = '$DB_NAME';
-\$usernamedb = '$DB_USER';
-\$passworddh = '$DB_PASS';
-
-\$connect = mysqli_connect("$DB_HOST", \$usernamedb, \$passworddh, \$dbname);
-if (!\$connect) die("Database connection failed!");
-
-mysqli_set_charset(\$connect, "utf8mb4");
-
-try {
-    \$pdo = new PDO("mysql:host=$DB_HOST;dbname=$DB_NAME;charset=utf8mb4", \$usernamedb, \$passworddh, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
-    ]);
-} catch(Exception \$e) {
-    die("PDO connection error");
-}
-
-\$APIKEY       = '$BOT_TOKEN';
-\$adminnumber  = '$ADMIN_ID';
-\$domainhosts  = '${DOMAIN:+https://'$DOMAIN'}';
-\$usernamebot  = '$BOT_USERNAME';
-?>
-CFGEOF
-
-chown www-data:www-data "$MIRZA_DIR/config.php"
-chmod 640 "$MIRZA_DIR/config.php"
-log "config.php ساخته شد"
-
-# ============================================================
-#  ۴. راه‌اندازی MariaDB
+#  ۳. راه‌اندازی MariaDB
 # ============================================================
 info "راه‌اندازی MariaDB..."
 
 # اگر دیتا دایرکتوری خالی باشه، اینیشیالایز کن
 if [ ! -d "/var/lib/mysql/mysql" ]; then
-    mysql_install_db --user=mysql --datadir=/var/lib/mysql > /dev/null 2>&1
+    # تشخیص دستور اینیشیالایز
+    if command -v mariadb-install-db &>/dev/null; then
+        mariadb-install-db --user=mysql --datadir=/var/lib/mysql > /dev/null 2>&1
+    elif command -v mysql_install_db &>/dev/null; then
+        mysql_install_db --user=mysql --datadir=/var/lib/mysql > /dev/null 2>&1
+    else
+        # روش دستی
+        mkdir -p /var/lib/mysql/mysql
+        chown -R mysql:mysql /var/lib/mysql
+    fi
     log "MariaDB اینیشیالایز شد"
 fi
 
-# استارت MariaDB در بک‌گراند
-mysqld --user=mysql --datadir=/var/lib/mysql &
+# استارت MariaDB در بک‌گراند (موقت)
+mysqld --user=mysql --datadir=/var/lib/mysql --skip-networking=0 --port=3306 &
 MYSQL_PID=$!
 
 # صبر برای آماده شدن
 for i in $(seq 1 30); do
-    if mysqladmin ping -h localhost > /dev/null 2>&1; then
+    if mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null; then
         break
     fi
     sleep 1
 done
 
-if ! mysqladmin ping -h localhost > /dev/null 2>&1; then
+if ! mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null; then
     err "MariaDB آماده نشد!"
     exit 1
 fi
 log "MariaDB آماده شد"
 
 # ============================================================
-#  ۵. ساخت دیتابیس و کاربر
+#  ۴. ساخت دیتابیس و کاربر
 # ============================================================
 info "ساخت دیتابیس و کاربر..."
 
-mysql -u root <<SQLEOF
+mysql -u root -h 127.0.0.1 <<SQLEOF
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQLEOF
 
 log "دیتابیس '$DB_NAME' و کاربر '$DB_USER' ساخته شد"
+
+# ============================================================
+#  ۵. ساخت config.php
+# ============================================================
+info "ساخت config.php..."
+
+# ساخت با Python برای اجتناب از مشکلات heredoc
+python3 -c "
+import os
+bot_token = os.environ['BOT_TOKEN']
+admin_id = os.environ['ADMIN_ID']
+bot_username = os.environ['BOT_USERNAME']
+domain = os.environ.get('DOMAIN', '')
+db_name = os.environ.get('DB_NAME', 'mirza_pro')
+db_user = os.environ.get('DB_USER', 'mirza_user')
+db_pass = os.environ['DB_PASS']
+db_host = os.environ.get('DB_HOST', '127.0.0.1')
+domain_val = f'https://{domain}' if domain else ''
+
+config = f'''<?php
+if(!defined(\"index\")) define(\"index\", true);
+
+\$dbname     = '{db_name}';
+\$usernamedb = '{db_user}';
+\$passworddh = '{db_pass}';
+
+\$connect = mysqli_connect(\"{db_host}\", \$usernamedb, \$passworddh, \$dbname);
+if (!\$connect) die(\"Database connection failed!\");
+
+mysqli_set_charset(\$connect, \"utf8mb4\");
+
+try {{
+    \$pdo = new PDO(\"mysql:host={db_host};dbname={db_name};charset=utf8mb4\", \$usernedb, \$passworddh, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]);
+}} catch(Exception \$e) {{
+    die(\"PDO connection error\");
+}}
+
+\$APIKEY       = '{bot_token}';
+\$adminnumber  = '{admin_id}';
+\$domainhosts  = '{domain_val}';
+\$usernamebot  = '{bot_username}';
+?>
+'''
+with open('{mira_dir}/config.php', 'w') as f:
+    f.write(config)
+" 2>/dev/null || {
+    # fallback: نوشتن مستقیم
+    cat > "$MIRZA_DIR/config.php" << 'PHPEOF'
+<?php
+if(!defined("index")) define("index", true);
+PHPEOF
+
+    # نوشتن خط به خط با Python
+    python3 << PYEOF > "$MIRZA_DIR/config.php"
+import os
+bot_token = os.environ['BOT_TOKEN']
+admin_id = os.environ['ADMIN_ID']
+bot_username = os.environ['BOT_USERNAME']
+domain = os.environ.get('DOMAIN', '')
+db_name = os.environ.get('DB_NAME', 'mirza_pro')
+db_user = os.environ.get('DB_USER', 'mirza_user')
+db_pass = os.environ['DB_PASS']
+db_host = os.environ.get('DB_HOST', '127.0.0.1')
+domain_val = f'https://{domain}' if domain else ''
+
+print('<?php')
+print('if(!defined("index")) define("index", true);')
+print()
+print(f"\\$dbname     = '{db_name}';")
+print(f"\\$usernedb = '{db_user}';")
+print(f"\\$passworddh = '{db_pass}';")
+print()
+print(f'\\$connect = mysqli_connect("{db_host}", \\$usernedb, \\$passworddh, \\$dbname);')
+print('if (!\\$connect) die("Database connection failed!");')
+print()
+print('mysqli_set_charset(\\$connect, "utf8mb4");')
+print()
+print('try {')
+print(f'    \\$pdo = new PDO("mysql:host={db_host};dbname={db_name};charset=utf8mb4", \\$usernedb, \\$passworddh, [')
+print('        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,')
+print('        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC')
+print('    ]);')
+print('} catch(Exception \\$e) {')
+print('    die("PDO connection error");')
+print('}')
+print()
+print(f"\\$APIKEY       = '{bot_token}';")
+print(f"\\$adminnumber  = '{admin_id}';")
+print(f"\\$domainhosts  = '{domain_val}';")
+print(f"\\$usernamebot  = '{bot_username}';")
+print('?>')
+PYEOF
+}
+
+chown www-data:www-data "$MIRZA_DIR/config.php"
+chmod 640 "$MIRZA_DIR/config.php"
+log "config.php ساخته شد"
 
 # ============================================================
 #  ۶. ساخت جداول
@@ -167,7 +243,11 @@ log "دیتابیس '$DB_NAME' و کاربر '$DB_USER' ساخته شد"
 if [ -f "$MIRZA_DIR/table.php" ]; then
     info "ساخت جداول..."
     cd "$MIRZA_DIR"
-    php table.php > /dev/null 2>&1 && log "جداول ساخته شد" || warn "جداول از قبل وجود دارند"
+    if php table.php > /dev/null 2>&1; then
+        log "جداول ساخته شد"
+    else
+        warn "جداول از قبل وجود دارند یا خطا"
+    fi
 fi
 
 # ============================================================
@@ -177,19 +257,19 @@ info "تنظیم Apache..."
 
 DOMAIN_VAL="${DOMAIN:-localhost}"
 
-cat > /etc/apache2/sites-available/mirza-pro.conf <<APACHEEOF
+cat > /etc/apache2/sites-available/mirza-pro.conf << APACHEEOF
 <VirtualHost *:80>
-    ServerName $DOMAIN_VAL
-    DocumentRoot $MIRZA_DIR
+    ServerName ${DOMAIN_VAL}
+    DocumentRoot ${MIRZA_DIR}
     
-    <Directory $MIRZA_DIR>
+    <Directory ${MIRZA_DIR}>
         Options Indexes FollowSymLinks
         AllowOverride All
         Require all granted
     </Directory>
     
-    ErrorLog \${APACHE_LOG_DIR}/mirza_error.log
-    CustomLog \${APACHE_LOG_DIR}/mirza_access.log combined
+    ErrorLog /var/log/apache2/mirza_error.log
+    CustomLog /var/log/apache2/mirza_access.log combined
 </VirtualHost>
 APACHEEOF
 
@@ -213,23 +293,40 @@ fi
 [ ! -f "$MIRZA_DIR/version" ] && echo "3.0" > "$MIRZA_DIR/version"
 chown www-data:www-data "$MIRZA_DIR/version" 2>/dev/null
 
+# Fix permissions
+chown -R www-data:www-data "$MIRZA_DIR"
+find "$MIRZA_DIR" -type d -exec chmod 755 {} \; 2>/dev/null
+find "$MIRZA_DIR" -type f -exec chmod 644 {} \; 2>/dev/null
+chmod 640 "$MIRZA_DIR/config.php"
+
 # ============================================================
-#  ۹. تنظیم Webhook تلگرام
+#  ۹. توقف mysqld موقت (supervisord دوباره استارت می‌کنه)
+# ============================================================
+info "توقف mysqld موقت..."
+kill "$MYSQL_PID" 2>/dev/null || true
+wait "$MYSQL_PID" 2>/dev/null || true
+sleep 2
+
+# ============================================================
+#  ۱۰. تنظیم Webhook تلگرام
 # ============================================================
 if [ -n "$DOMAIN" ]; then
     info "تنظیم Webhook..."
-    WEBHOOK_RESULT=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://$DOMAIN/index.php")
+    WEBHOOK_URL="https://${DOMAIN}/index.php"
+    WEBHOOK_RESULT=$(curl -sf "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}" 2>/dev/null || echo '{"ok":false}')
     if echo "$WEBHOOK_RESULT" | grep -q '"ok":true'; then
-        log "Webhook تنظیم شد: https://$DOMAIN/index.php"
+        log "Webhook تنظیم شد: $WEBHOOK_URL"
     else
         warn "Webhook تنظیم نشد — بعداً دستی تنظیم کنید"
+        warn "دستور: curl 'https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}'"
     fi
 else
     warn "DOMAIN تنظیم نشده — Webhook تنظیم نمیشود"
+    warn "بعداً با: curl 'https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=YOUR_DOMAIN/index.php'"
 fi
 
 # ============================================================
-#  ۱۰. نمایش اطلاعات نهایی
+#  ۱۱. نمایش اطلاعات نهایی
 # ============================================================
 echo ""
 echo -e "${G}╔══════════════════════════════════════════════════╗${W}"
@@ -244,12 +341,13 @@ echo -e "  🗄️  Database:  $DB_NAME"
 echo -e "  👤 DB User:   $DB_USER"
 echo -e "  🔑 DB Pass:   ${DB_PASS}"
 echo -e "  📁 Files:     $MIRZA_DIR"
+echo -e "  🔌 Port:      $PORT"
 echo ""
 echo -e "${Y}⚠️  رمز دیتابیس را در جای امنی ذخیره کنید!${W}"
 echo ""
 
 # ============================================================
-#  ۱۱. اجرای Supervisor (Apache + MariaDB)
+#  ۱۲. اجرای Supervisor (Apache + MariaDB)
 # ============================================================
 info "شروع سرویس‌ها..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf

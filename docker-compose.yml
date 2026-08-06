@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mirza-pro:
     build: .
@@ -7,12 +5,9 @@ services:
     restart: unless-stopped
     
     environment:
-      # ── اجباری ──
       BOT_TOKEN: "${BOT_TOKEN}"
       ADMIN_ID: "${ADMIN_ID}"
       BOT_USERNAME: "${BOT_USERNAME}"
-      
-      # ── اختیاری ──
       DOMAIN: "${DOMAIN:-}"
       DB_NAME: "${DB_NAME:-mirza_pro}"
       DB_USER: "${DB_USER:-mirza_user}"
@@ -20,13 +15,3 @@ services:
     
     ports:
       - "${PORT:-8080}:80"
-    
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - mirza_files:/var/www/mirza_pro
-
-volumes:
-  mysql_data:
-    driver: local
-  mirza_files:
-    driver: local
