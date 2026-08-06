@@ -1,5 +1,7 @@
 #!/bin/bash
-# Mirza Pro — entrypoint v6
+# Mirza Pro — entrypoint v7
+# Start supervisord first (nginx + php-fpm) so health checks pass,
+# then run setup in background.
 
 log()  { echo "[OK] $1"; }
 warn() { echo "[WARN] $1"; }
@@ -21,6 +23,18 @@ fi
 
 log "BOT @$BOT_USERNAME | ADMIN $ADMIN_ID | DOMAIN ${DOMAIN:-auto}"
 
+# START SUPERVISORD IN BACKGROUND immediately — nginx + php-fpm respond to health checks
+/usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf &
+SUPER_PID=$!
+
+# Wait for nginx to be ready
+for i in $(seq 1 15); do
+    curl -sf http://127.0.0.1:80/ >/dev/null 2>&1 && break
+    sleep 1
+done
+
+# --- Setup phase (runs while nginx serves) ---
+
 # Clone
 MIRZA="/var/www/mirza_pro"
 if [ ! -f "$MIRZA/index.php" ]; then
@@ -37,7 +51,7 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     chown -R mysql:mysql /var/lib/mysql
 fi
 
-# Start mysqld temporarily
+# Start mysqld temporarily for DB setup
 mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
 MPID=$!
 sleep 3
@@ -102,5 +116,7 @@ else
     warn "No DOMAIN — webhook NOT set"
 fi
 
-log "Starting..."
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+log "Setup complete. supervisord PID=$SUPER_PID"
+
+# Keep supervisord running
+wait $SUPER_PID
