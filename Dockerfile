@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor git curl unzip openssl ca-certificates bash coreutils procps \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# nginx
-RUN rm -f /etc/nginx/sites-enabled/default
+# nginx — remove ALL default configs to avoid duplicate default_server
+RUN rm -rf /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*
 COPY nginx.conf /etc/nginx/sites-available/mirza-pro
 RUN ln -sf /etc/nginx/sites-available/mirza-pro /etc/nginx/sites-enabled/mirza-pro
 
