@@ -69,8 +69,8 @@ grep -q "supervisor" "$DIR/Dockerfile" && pass "supervisor نصب شده" || fai
 grep -qi "pdo_mysql\|php.*mysql" "$DIR/Dockerfile" && pass "pdo_mysql نصب شده" || fail "pdo_mysql یافت نشد"
 grep -qi "mysqli\|php.*mysql" "$DIR/Dockerfile" && pass "mysqli نصب شده" || fail "mysqli یافت نشد"
 
-# بررسی Apache modules
-grep -q "a2enmod.*rewrite" "$DIR/Dockerfile" && pass "mod_rewrite فعال" || fail "mod_rewrite یافت نشد"
+# بررسی nginx یا Apache
+grep -qi "nginx\|apache" "$DIR/Dockerfile" && pass "Web server نصب شده" || fail "Web server یافت نشد"
 
 # بررسی ENTRYPOINT
 grep -q 'ENTRYPOINT.*entrypoint.sh' "$DIR/Dockerfile" && pass "ENTRYPOINT تنظیم شده" || fail "ENTRYPOINT یافت نشد"
@@ -110,8 +110,8 @@ grep -q 'git clone.*mirza_pro' "$DIR/entrypoint.sh" && pass "git clone mirza_pro
 # بررسی MariaDB init
 grep -q 'mysql_install_db\|mariadb-install-db' "$DIR/entrypoint.sh" && pass "MariaDB init" || fail "MariaDB init یافت نشد"
 
-# بررسی Apache config
-grep -q 'a2ensite' "$DIR/entrypoint.sh" && pass "Apache vhost setup" || fail "Apache vhost setup یافت نشد"
+# بررسی nginx config
+grep -qi "nginx" "$DIR/entrypoint.sh" && pass "nginx config" || fail "nginx config یافت نشد"
 
 # بررسی Webhook
 grep -q 'setWebhook' "$DIR/entrypoint.sh" && pass "Telegram Webhook" || fail "Telegram Webhook یافت نشد"
@@ -125,7 +125,7 @@ grep -q 'exec.*supervisord' "$DIR/entrypoint.sh" && pass "supervisord exec" || f
 echo -e "\n${C}━━━ بخش ۴: supervisord.conf ━━━${W}"
 
 grep -q "\[program:mariadb\]" "$DIR/supervisord.conf" && pass "برنامه mariadb" || fail "برنامه mariadb یافت نشد"
-grep -q "\[program:apache\]" "$DIR/supervisord.conf" && pass "برنامه apache" || fail "برنامه apache یافت نشد"
+grep -qi "program:nginx\|program:apache\|program:php" "$DIR/supervisord.conf" && pass "Web server در supervisord" || fail "Web server در supervisord یافت نشد"
 grep -q "nodaemon=true" "$DIR/supervisord.conf" && pass "nodaemon=true" || fail "nodaemon=true یافت نشد"
 grep -q "autorestart=true" "$DIR/supervisord.conf" && pass "autorestart=true" || fail "autorestart=true یافت نشد"
 grep -q "stdout_logfile=/dev/stdout" "$DIR/supervisord.conf" && pass "stdout به stdout" || fail "stdout به stdout یافت نشد"

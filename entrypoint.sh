@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Mirza Pro — Docker Entrypoint v3
-# تشخیص خودکار متغیرها + راه‌اندازی کامل بدون باگ
+# Mirza Pro — Docker Entrypoint v4
+# nginx + php-fpm + MariaDB
 # ============================================================
 set -euo pipefail
 
@@ -11,7 +11,7 @@ warn() { echo -e "${Y}[⚠]${W} $1"; }
 err()  { echo -e "${R}[✘]${W} $1"; }
 info() { echo -e "${B}[i]${W} $1"; }
 
-# ── جلوگیری از اجرای مجدد ──
+# ── Guard ──
 GUARD="/var/run/mirza-setup-done"
 if [ -f "$GUARD" ]; then
     info "Setup قبلاً انجام شده — فقط سرویس‌ها"
@@ -72,11 +72,10 @@ chown -R www-data:www-data "$MIRZA_DIR"
 chmod -R 755 "$MIRZA_DIR"
 
 # ============================================================
-#  ۳. MariaDB — بدون skip-grant-tables
+#  ۳. MariaDB
 # ============================================================
 info "راه‌اندازی MariaDB..."
 
-# Init فقط اگر خالی باشه
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     if command -v mariadb-install-db &>/dev/null; then
         mariadb-install-db --user=mysql --datadir=/var/lib/mysql > /dev/null 2>&1
@@ -89,12 +88,10 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     log "MariaDB اینیشیالایز شد"
 fi
 
-# استارت عادی — بدون skip-grant-tables
 mysqld --user=mysql --datadir=/var/lib/mysql \
     --bind-address=127.0.0.1 --port=3306 &
 MYSQL_PID=$!
 
-# صبر برای آماده شدن — اتصال از طریق SOCKET (نه TCP)
 info "صبر برای MariaDB..."
 READY=0
 for i in $(seq 1 30); do
@@ -112,11 +109,10 @@ fi
 log "MariaDB آماده شد"
 
 # ============================================================
-#  ۴. ساخت دیتابیس — فقط SOCKET connection
+#  ۴. ساخت دیتابیس
 # ============================================================
 info "ساخت دیتابیس..."
 
-# اتصال از طریق socket — root روی Debian با unix_socket auth کار می‌کنه
 mysql --protocol=socket -u root <<SQLEOF
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -138,7 +134,7 @@ if [ -f "$MIRZA_DIR/table.php" ]; then
 fi
 
 # ============================================================
-#  ۶. config.php — با Python
+#  ۶. config.php
 # ============================================================
 info "ساخت config.php..."
 
@@ -192,30 +188,7 @@ chmod 640 "$MIRZA_DIR/config.php"
 log "config.php ساخته شد"
 
 # ============================================================
-#  ۷. Apache
-# ============================================================
-info "تنظیم Apache..."
-
-cat > /etc/apache2/sites-available/mirza-pro.conf << APACHEEOF
-<VirtualHost *:80>
-    ServerName ${DOMAIN:-localhost}
-    DocumentRoot ${MIRZA_DIR}
-    <Directory ${MIRZA_DIR}>
-        Options Indexes FollowSymLinks
-        AllowOverride All
-        Require all granted
-    </Directory>
-    ErrorLog /var/log/apache2/mirza_error.log
-    CustomLog /var/log/apache2/mirza_access.log combined
-</VirtualHost>
-APACHEEOF
-
-a2ensite mirza-pro.conf > /dev/null 2>&1
-a2dissite 000-default.conf > /dev/null 2>&1
-log "Apache تنظیم شد"
-
-# ============================================================
-#  ۸. رفع خطاهای Mirza Pro
+#  ۷. رفع خطاهای Mirza Pro
 # ============================================================
 if [ -f "$MIRZA_DIR/alireza_single.php" ] && [ ! -f "$MIRZA_DIR/alireza.php" ]; then
     mv "$MIRZA_DIR/alireza_single.php" "$MIRZA_DIR/alireza.php" 2>/dev/null
@@ -226,7 +199,7 @@ fi
 chown -R www-data:www-data "$MIRZA_DIR"
 
 # ============================================================
-#  ۹. توقف mysqld موقت
+#  ۸. توقف mysqld موقت
 # ============================================================
 info "توقف mysqld..."
 kill "$MYSQL_PID" 2>/dev/null || true
@@ -234,7 +207,7 @@ wait "$MYSQL_PID" 2>/dev/null || true
 sleep 2
 
 # ============================================================
-#  ۱۰. Webhook
+#  ۹. Webhook
 # ============================================================
 if [ -n "$DOMAIN" ]; then
     info "تنظیم Webhook..."
@@ -250,7 +223,7 @@ else
 fi
 
 # ============================================================
-#  ۱۱. اطلاعات
+#  ۱۰. اطلاعات
 # ============================================================
 echo ""
 echo -e "${G}╔══════════════════════════════════════════════════╗${W}"
@@ -265,7 +238,7 @@ echo -e "  🔑 DB Pass:   $DB_PASS"
 echo ""
 
 # ============================================================
-#  ۱۲. علامت اتمام + شروع Supervisor
+#  ۱۱. شروع سرویس‌ها
 # ============================================================
 touch "$GUARD"
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
