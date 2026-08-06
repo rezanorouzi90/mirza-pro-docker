@@ -111,7 +111,7 @@ grep -q 'git clone.*mirza_pro' "$DIR/entrypoint.sh" && pass "git clone mirza_pro
 grep -q 'mysql_install_db\|mariadb-install-db' "$DIR/entrypoint.sh" && pass "MariaDB init" || fail "MariaDB init یافت نشد"
 
 # بررسی nginx config
-grep -qi "nginx" "$DIR/entrypoint.sh" && pass "nginx config" || fail "nginx config یافت نشد"
+grep -qi "nginx" "$DIR/Dockerfile" && pass "nginx config" || fail "nginx config یافت نشد"
 
 # بررسی Webhook
 grep -q 'setWebhook' "$DIR/entrypoint.sh" && pass "Telegram Webhook" || fail "Telegram Webhook یافت نشد"
