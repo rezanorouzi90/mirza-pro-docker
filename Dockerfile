@@ -6,13 +6,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx php8.2-fpm php8.2-mysql php8.2-curl php8.2-mbstring \
     php8.2-xml php8.2-zip php8.2-gd php8.2-bcmath php8.2-intl \
     mariadb-server mariadb-client \
-    supervisor git curl unzip openssl ca-certificates bash \
+    supervisor git curl unzip openssl ca-certificates bash coreutils procps \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── nginx ──
+# nginx
 RUN rm -f /etc/nginx/sites-enabled/default
 COPY nginx.conf /etc/nginx/sites-available/mirza-pro
 RUN ln -sf /etc/nginx/sites-available/mirza-pro /etc/nginx/sites-enabled/mirza-pro
+
+# php-fpm: listen on socket
+RUN sed -i 's|listen = /run/php/php8.2-fpm.sock|listen = /run/php/php8.2-fpm.sock|' /etc/php/8.2/fpm/pool.d/www.conf && \
+    sed -i 's|;clear_env = no|clear_env = no|' /etc/php/8.2/fpm/pool.d/www.conf
 
 RUN mkdir -p /var/run/mysqld /var/log/supervisor /run/php /var/www/mirza_pro && \
     chown mysql:mysql /var/run/mysqld && \
