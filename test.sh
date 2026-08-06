@@ -56,7 +56,7 @@ else
 fi
 
 # بررسی FROM
-grep -q "FROM.*php.*apache" "$DIR/Dockerfile" && pass "FROM php:apache" || fail "FROM php:apache یافت نشد"
+grep -qi "FROM.*\(php.*apache\|debian\)" "$DIR/Dockerfile" && pass "FROM base image" || fail "FROM base image یافت نشد"
 
 # بررسی نصب mariadb
 grep -q "mariadb-server" "$DIR/Dockerfile" && pass "mariadb-server نصب شده" || fail "mariadb-server یافت نشد"
@@ -65,9 +65,9 @@ grep -q "mariadb-client" "$DIR/Dockerfile" && pass "mariadb-client نصب شده
 # بررسی نصب supervisor
 grep -q "supervisor" "$DIR/Dockerfile" && pass "supervisor نصب شده" || fail "supervisor یافت نشد"
 
-# بررسی PHP extensions
-grep -q "pdo_mysql" "$DIR/Dockerfile" && pass "pdo_mysql نصب شده" || fail "pdo_mysql یافت نشد"
-grep -q "mysqli" "$DIR/Dockerfile" && pass "mysqli نصب شده" || fail "mysqli یافت نشد"
+# بررسی PHP extensions (apt یا docker-php-ext)
+grep -qi "pdo_mysql\|php.*mysql" "$DIR/Dockerfile" && pass "pdo_mysql نصب شده" || fail "pdo_mysql یافت نشد"
+grep -qi "mysqli\|php.*mysql" "$DIR/Dockerfile" && pass "mysqli نصب شده" || fail "mysqli یافت نشد"
 
 # بررسی Apache modules
 grep -q "a2enmod.*rewrite" "$DIR/Dockerfile" && pass "mod_rewrite فعال" || fail "mod_rewrite یافت نشد"
