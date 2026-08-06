@@ -70,7 +70,7 @@ grep -q "pdo_mysql" "$DIR/Dockerfile" && pass "pdo_mysql نصب شده" || fail 
 grep -q "mysqli" "$DIR/Dockerfile" && pass "mysqli نصب شده" || fail "mysqli یافت نشد"
 
 # بررسی Apache modules
-grep -q "a2enmod rewrite" "$DIR/Dockerfile" && pass "mod_rewrite فعال" || fail "mod_rewrite یافت نشد"
+grep -q "a2enmod.*rewrite" "$DIR/Dockerfile" && pass "mod_rewrite فعال" || fail "mod_rewrite یافت نشد"
 
 # بررسی ENTRYPOINT
 grep -q 'ENTRYPOINT.*entrypoint.sh' "$DIR/Dockerfile" && pass "ENTRYPOINT تنظیم شده" || fail "ENTRYPOINT یافت نشد"
