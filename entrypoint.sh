@@ -1,6 +1,6 @@
 #!/bin/bash
-# Mirza Pro — entrypoint v11
-# Flow: nginx+php start immediately → MariaDB init → config → supervisord takes over
+# Mirza Pro — entrypoint v12
+# Flow: validate → init MariaDB → config → supervisord (nginx+php-fpm+mariadb)
 
 log()  { echo "[OK] $1"; }
 warn() { echo "[WARN] $1"; }
@@ -29,7 +29,19 @@ log "BOT @$BOT_USERNAME | ADMIN $ADMIN_ID | DOMAIN ${DOMAIN:-auto}"
 
 MIRZA="/var/www/mirza_pro"
 
-# ═══ PHASE 1: Start MariaDB temporarily for setup ═══
+# ═══ PHASE 1: Init MariaDB data directory (BEFORE starting mysqld) ═══
+if [ ! -d "/var/lib/mysql/mysql" ]; then
+    log "Initializing MariaDB data directory..."
+    mkdir -p /var/lib/mysql
+    chown -R mysql:mysql /var/lib/mysql
+    mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
+    mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
+    mkdir -p /var/lib/mysql/mysql
+    chown -R mysql:mysql /var/lib/mysql
+    log "MariaDB data directory initialized"
+fi
+
+# ═══ PHASE 2: Start MariaDB temporarily for DB setup ═══
 mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
 MPID=$!
 
@@ -38,14 +50,6 @@ for i in $(seq 1 30); do
     sleep 1
 done
 log "MariaDB ready"
-
-# Init MariaDB if empty
-if [ ! -d "/var/lib/mysql/mysql" ]; then
-    mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
-    mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
-    mkdir -p /var/lib/mysql/mysql
-    chown -R mysql:mysql /var/lib/mysql
-fi
 
 # Create DB + user
 mysql --protocol=socket -u root <<EOSQL 2>/dev/null || true
@@ -58,7 +62,7 @@ FLUSH PRIVILEGES;
 EOSQL
 log "Database $DB_NAME created"
 
-# Generate config.php
+# ═══ PHASE 3: Generate config.php ═══
 DOMAIN_VAL=""
 [ -n "$DOMAIN" ] && DOMAIN_VAL="https://$DOMAIN"
 
@@ -97,12 +101,12 @@ log "DB tables initialized"
 [ -f "$MIRZA/alireza_single.php" ] && [ ! -f "$MIRZA/alireza.php" ] && \
     mv "$MIRZA/alireza_single.php" "$MIRZA/alireza.php" 2>/dev/null || true
 
-# Stop temp mysqld
+# Stop temp mysqld (supervisord will manage it)
 mysqladmin --protocol=socket -u root shutdown 2>/dev/null || kill $MPID 2>/dev/null || true
 wait $MPID 2>/dev/null || true
 sleep 2
 
-# ═══ PHASE 2: Set webhook ═══
+# ═══ PHASE 4: Set webhook ═══
 if [ -n "$DOMAIN" ]; then
     RESULT=$(curl -sf "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://${DOMAIN}/index.php" 2>/dev/null || echo "")
     echo "$RESULT" | grep -q '"ok":true' && log "Webhook: https://${DOMAIN}/index.php" || warn "Webhook failed"
@@ -110,6 +114,6 @@ else
     warn "No DOMAIN set — webhook NOT configured"
 fi
 
-# ═══ PHASE 3: Start supervisord (manages nginx + php-fpm + mariadb) ═══
+# ═══ PHASE 5: Start supervisord (manages nginx + php-fpm + mariadb) ═══
 log "Starting supervisord..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
