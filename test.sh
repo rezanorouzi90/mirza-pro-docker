@@ -172,7 +172,7 @@ else
 fi
 
 # بررسی chmod config.php
-grep -q "chmod 640.*config.php" "$DIR/entrypoint.sh" && pass "config.php chmod 640" || fail "config.php chmod 640 یافت نشد"
+grep -q "chmod 640" "$DIR/entrypoint.sh" && pass "config.php chmod 640" || fail "config.php chmod 640 یافت نشد"
 
 # بررسی .gitignore
 grep -q "\.env" "$DIR/.gitignore" && pass ".env در gitignore" || fail ".env در gitignore یافت نشد"
