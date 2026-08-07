@@ -1,6 +1,7 @@
 #!/bin/bash
-# Mirza Pro — entrypoint v9 (minimal)
-# Source is pre-cloned in Docker image. Only DB + config + webhook needed.
+# Mirza Pro — entrypoint v10
+# nginx starts IMMEDIATELY → Railway health check passes
+# DB setup runs AFTER nginx is serving
 
 log()  { echo "[OK] $1"; }
 warn() { echo "[WARN] $1"; }
@@ -24,14 +25,20 @@ log "BOT @$BOT_USERNAME | ADMIN $ADMIN_ID | DOMAIN ${DOMAIN:-auto}"
 
 MIRZA="/var/www/mirza_pro"
 
-# ═══ Guard: skip setup if already done ═══
-GUARD="/var/run/mirza-setup-done"
-if [ -f "$GUARD" ]; then
-    log "Setup already done, starting services..."
-    exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
-fi
+# ═══ PHASE 1: Start nginx + php-fpm IMMEDIATELY ═══
+# This makes the container respond to Railway health checks right away
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf &
+SUPER_PID=$!
 
-# ═══ MariaDB init ═══
+# Wait for nginx to be ready (max 10s)
+for i in $(seq 1 10); do
+    curl -sf http://127.0.0.1:80/ >/dev/null 2>&1 && break
+    sleep 1
+done
+log "nginx ready"
+
+# ═══ PHASE 2: MariaDB + Config (runs while nginx serves) ═══
+# Init MariaDB data directory
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
     mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
@@ -39,15 +46,15 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     chown -R mysql:mysql /var/lib/mysql
 fi
 
-# Start temp mysqld
+# Start MariaDB temporarily
 mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
 MPID=$!
-for i in $(seq 1 10); do
+for i in $(seq 1 15); do
     mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 && break
     sleep 1
 done
 
-# Create DB + user
+# Create DB
 mysql --protocol=socket -u root <<EOSQL 2>/dev/null || true
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -99,6 +106,10 @@ mysqladmin --protocol=socket -u root shutdown 2>/dev/null || kill $MPID 2>/dev/n
 wait $MPID 2>/dev/null || true
 sleep 1
 
+# Start MariaDB for runtime
+mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
+MYSQL_PID=$!
+
 # Webhook
 if [ -n "$DOMAIN" ]; then
     RESULT=$(curl -sf "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://${DOMAIN}/index.php" 2>/dev/null || echo "")
@@ -107,8 +118,7 @@ else
     warn "No DOMAIN — webhook NOT set"
 fi
 
-# Mark setup done
-touch "$GUARD"
-log "Setup complete — starting supervisord"
+log "Setup complete. supervisord=$SUPER_PID mysql=$MYSQL_PID"
 
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+# Keep container alive — wait for supervisord
+wait $SUPER_PID
