@@ -1,7 +1,6 @@
 #!/bin/bash
-# Mirza Pro — entrypoint v8
-# supervisord = nginx + php-fpm only (health check ready)
-# MariaDB managed by entrypoint (no lock conflicts)
+# Mirza Pro — entrypoint v9 (minimal)
+# Source is pre-cloned in Docker image. Only DB + config + webhook needed.
 
 log()  { echo "[OK] $1"; }
 warn() { echo "[WARN] $1"; }
@@ -23,7 +22,16 @@ fi
 
 log "BOT @$BOT_USERNAME | ADMIN $ADMIN_ID | DOMAIN ${DOMAIN:-auto}"
 
-# ═══ Phase 1: MariaDB init ═══
+MIRZA="/var/www/mirza_pro"
+
+# ═══ Guard: skip setup if already done ═══
+GUARD="/var/run/mirza-setup-done"
+if [ -f "$GUARD" ]; then
+    log "Setup already done, starting services..."
+    exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+fi
+
+# ═══ MariaDB init ═══
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
     mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
@@ -31,15 +39,15 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     chown -R mysql:mysql /var/lib/mysql
 fi
 
-# Start MariaDB for setup
+# Start temp mysqld
 mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
 MPID=$!
-for i in $(seq 1 15); do
+for i in $(seq 1 10); do
     mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 && break
     sleep 1
 done
 
-# ═══ Phase 2: DB + Config ═══
+# Create DB + user
 mysql --protocol=socket -u root <<EOSQL 2>/dev/null || true
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -50,15 +58,7 @@ FLUSH PRIVILEGES;
 EOSQL
 log "DB ready"
 
-# Clone source
-MIRZA="/var/www/mirza_pro"
-if [ ! -f "$MIRZA/index.php" ]; then
-    rm -rf "$MIRZA"
-    git clone --depth 1 https://github.com/mahdiMGF2/mirza_pro.git "$MIRZA" 2>/dev/null || true
-fi
-chown -R www-data:www-data "$MIRZA" 2>/dev/null || true
-
-# Create tables
+# Tables
 [ -f "$MIRZA/table.php" ] && (cd "$MIRZA" && php table.php >/dev/null 2>&1) || true
 
 # config.php
@@ -86,7 +86,6 @@ try {
 \$usernamebot  = '$BOT_USERNAME';
 ?>
 PHPEOF
-
 chown www-data:www-data "$MIRZA/config.php" 2>/dev/null
 chmod 640 "$MIRZA/config.php" 2>/dev/null
 log "config.php"
@@ -94,6 +93,11 @@ log "config.php"
 # Fix alireza
 [ -f "$MIRZA/alireza_single.php" ] && [ ! -f "$MIRZA/alireza.php" ] && \
     mv "$MIRZA/alireza_single.php" "$MIRZA/alireza.php" 2>/dev/null || true
+
+# Stop temp mysqld
+mysqladmin --protocol=socket -u root shutdown 2>/dev/null || kill $MPID 2>/dev/null || true
+wait $MPID 2>/dev/null || true
+sleep 1
 
 # Webhook
 if [ -n "$DOMAIN" ]; then
@@ -103,21 +107,8 @@ else
     warn "No DOMAIN — webhook NOT set"
 fi
 
-# ═══ Phase 3: Start services ═══
-# Stop temp mysqld (supervisord will NOT restart it — we manage it)
-kill $MPID 2>/dev/null || true
-wait $MPID 2>/dev/null || true
-sleep 2
+# Mark setup done
+touch "$GUARD"
+log "Setup complete — starting supervisord"
 
-# Start nginx + php-fpm via supervisord (background)
-/usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf &
-SUPER_PID=$!
-
-# Start MariaDB for runtime (background, kept alive by container)
-mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
-MYSQL_PID=$!
-
-log "All services started. supervisord=$SUPER_PID mysql=$MYSQL_PID"
-
-# Keep container alive — wait for supervisord
-wait $SUPER_PID
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
