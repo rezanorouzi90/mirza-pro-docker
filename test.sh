@@ -104,8 +104,8 @@ grep -q 'RAILWAY_PUBLIC_DOMAIN' "$DIR/entrypoint.sh" && pass "تشخیص دام�
 # بررسی اعتبارسنجی
 grep -q 'BOT_TOKEN.*ADMIN_ID\|Missing.*BOT_TOKEN' "$DIR/entrypoint.sh" && pass "اعتبارسنجی BOT_TOKEN" || fail "اعتبارسنجی BOT_TOKEN یافت نشد"
 
-# بررسی git clone
-grep -q 'git clone.*mirza_pro' "$DIR/entrypoint.sh" && pass "git clone mirza_pro" || fail "git clone mirza_pro یافت نشد"
+# بررسی git clone (Dockerfile یا entrypoint)
+grep -q 'git clone.*mirza_pro' "$DIR/Dockerfile" "$DIR/entrypoint.sh" 2>/dev/null && pass "git clone mirza_pro" || fail "git clone mirza_pro یافت نشد"
 
 # بررسی MariaDB init
 grep -q 'mysql_install_db\|mariadb-install-db' "$DIR/entrypoint.sh" && pass "MariaDB init" || fail "MariaDB init یافت نشد"
@@ -124,7 +124,7 @@ grep -q 'exec.*supervisord' "$DIR/entrypoint.sh" && pass "supervisord exec" || f
 # ============================================================
 echo -e "\n${C}━━━ بخش ۴: supervisord.conf ━━━${W}"
 
-grep -q "\[program:mariadb\]" "$DIR/supervisord.conf" && pass "برنامه mariadb" || fail "برنامه mariadb یافت نشد"
+grep -qi "program:mariadb" "$DIR/supervisord.conf" && pass "برنامه mariadb" || fail "برنامه mariadb یافت نشد"
 grep -qi "program:nginx\|program:apache\|program:php" "$DIR/supervisord.conf" && pass "Web server در supervisord" || fail "Web server در supervisord یافت نشد"
 grep -q "nodaemon=true" "$DIR/supervisord.conf" && pass "nodaemon=true" || fail "nodaemon=true یافت نشد"
 grep -q "autorestart=true" "$DIR/supervisord.conf" && pass "autorestart=true" || fail "autorestart=true یافت نشد"

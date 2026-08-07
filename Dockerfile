@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /tmp/mirza-pro-nginx.conf \
     && sed -i 's|;clear_env = no|clear_env = no|' /etc/php/8.2/fpm/pool.d/www.conf
 
-# Pre-clone mirza_pro source into image (saves startup time)
+# Pre-clone mirza_pro source into image
 RUN mkdir -p /var/www/mirza_pro \
     && git clone --depth 1 https://github.com/mahdiMGF2/mirza_pro.git /var/www/mirza_pro \
     && chown -R www-data:www-data /var/www/mirza_pro \

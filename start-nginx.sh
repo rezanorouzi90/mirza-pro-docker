@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wait for php-fpm socket then start nginx
+# Wait for php-fpm socket before starting nginx
 for i in $(seq 1 30); do
     [ -S /run/php/php8.2-fpm.sock ] && break
     sleep 1

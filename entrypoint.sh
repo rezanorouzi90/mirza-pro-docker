@@ -1,7 +1,6 @@
 #!/bin/bash
-# Mirza Pro — entrypoint v10
-# nginx starts IMMEDIATELY → Railway health check passes
-# DB setup runs AFTER nginx is serving
+# Mirza Pro — entrypoint v11
+# Flow: nginx+php start immediately → MariaDB init → config → supervisord takes over
 
 log()  { echo "[OK] $1"; }
 warn() { echo "[WARN] $1"; }
@@ -14,31 +13,33 @@ DB_NAME="${DB_NAME:-mirza_pro}"
 DB_USER="${DB_USER:-mirza_user}"
 DB_PASS="${DB_PASS:-}"
 
+# Auto-detect Railway domain
 [ -z "$DOMAIN" ] && [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ] && DOMAIN="$RAILWAY_PUBLIC_DOMAIN"
+
+# Auto-generate DB password if not set
 [ -z "$DB_PASS" ] && DB_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c -24)
 
+# Validate required vars
 if [ -z "$BOT_TOKEN" ] || [ -z "$ADMIN_ID" ] || [ -z "$BOT_USERNAME" ]; then
-    echo "Missing BOT_TOKEN / ADMIN_ID / BOT_USERNAME"; exit 1
+    echo "ERROR: Missing BOT_TOKEN / ADMIN_ID / BOT_USERNAME"
+    exit 1
 fi
 
 log "BOT @$BOT_USERNAME | ADMIN $ADMIN_ID | DOMAIN ${DOMAIN:-auto}"
 
 MIRZA="/var/www/mirza_pro"
 
-# ═══ PHASE 1: Start nginx + php-fpm IMMEDIATELY ═══
-# This makes the container respond to Railway health checks right away
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf &
-SUPER_PID=$!
+# ═══ PHASE 1: Start MariaDB temporarily for setup ═══
+mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
+MPID=$!
 
-# Wait for nginx to be ready (max 10s)
-for i in $(seq 1 10); do
-    curl -sf http://127.0.0.1:80/ >/dev/null 2>&1 && break
+for i in $(seq 1 30); do
+    mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 && break
     sleep 1
 done
-log "nginx ready"
+log "MariaDB ready"
 
-# ═══ PHASE 2: MariaDB + Config (runs while nginx serves) ═══
-# Init MariaDB data directory
+# Init MariaDB if empty
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
     mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || \
@@ -46,15 +47,7 @@ if [ ! -d "/var/lib/mysql/mysql" ]; then
     chown -R mysql:mysql /var/lib/mysql
 fi
 
-# Start MariaDB temporarily
-mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
-MPID=$!
-for i in $(seq 1 15); do
-    mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 && break
-    sleep 1
-done
-
-# Create DB
+# Create DB + user
 mysql --protocol=socket -u root <<EOSQL 2>/dev/null || true
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -63,20 +56,20 @@ GRANT ALL ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
 GRANT ALL ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 EOSQL
-log "DB ready"
+log "Database $DB_NAME created"
 
-# Tables
-[ -f "$MIRZA/table.php" ] && (cd "$MIRZA" && php table.php >/dev/null 2>&1) || true
-
-# config.php
+# Generate config.php
 DOMAIN_VAL=""
 [ -n "$DOMAIN" ] && DOMAIN_VAL="https://$DOMAIN"
 
-cat > "$MIRZA/config.php" << PHPEOF
+cat > "$MIRZA/config.php" << 'PHPEOF'
 <?php
 if(!defined("index")) define("index", true);
+PHPEOF
+
+cat >> "$MIRZA/config.php" << EOF
 \$dbname     = '$DB_NAME';
-\$usernedb = '$DB_USER';
+\$usernedb   = '$DB_USER';
 \$passworddh = '$DB_PASS';
 \$connect = mysqli_connect("127.0.0.1", \$usernedb, \$passworddh, \$dbname);
 if (!\$connect) die("Database connection failed!");
@@ -86,39 +79,37 @@ try {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
     ]);
-} catch(Exception \$e) { die("PDO error"); }
+} catch(Exception \$e) { die("PDO error: " . \$e->getMessage()); }
 \$APIKEY       = '$BOT_TOKEN';
 \$adminnumber  = '$ADMIN_ID';
 \$domainhosts  = '$DOMAIN_VAL';
 \$usernamebot  = '$BOT_USERNAME';
-?>
-PHPEOF
+?>\nEOF
 chown www-data:www-data "$MIRZA/config.php" 2>/dev/null
 chmod 640 "$MIRZA/config.php" 2>/dev/null
-log "config.php"
+log "config.php generated"
 
-# Fix alireza
+# Run table.php to create/update DB schema
+[ -f "$MIRZA/table.php" ] && (cd "$MIRZA" && php table.php >/dev/null 2>&1) || true
+log "DB tables initialized"
+
+# Fix alireza_single.php naming
 [ -f "$MIRZA/alireza_single.php" ] && [ ! -f "$MIRZA/alireza.php" ] && \
     mv "$MIRZA/alireza_single.php" "$MIRZA/alireza.php" 2>/dev/null || true
 
 # Stop temp mysqld
 mysqladmin --protocol=socket -u root shutdown 2>/dev/null || kill $MPID 2>/dev/null || true
 wait $MPID 2>/dev/null || true
-sleep 1
+sleep 2
 
-# Start MariaDB for runtime
-mysqld --user=mysql --datadir=/var/lib/mysql --bind-address=127.0.0.1 --port=3306 &
-MYSQL_PID=$!
-
-# Webhook
+# ═══ PHASE 2: Set webhook ═══
 if [ -n "$DOMAIN" ]; then
     RESULT=$(curl -sf "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://${DOMAIN}/index.php" 2>/dev/null || echo "")
     echo "$RESULT" | grep -q '"ok":true' && log "Webhook: https://${DOMAIN}/index.php" || warn "Webhook failed"
 else
-    warn "No DOMAIN — webhook NOT set"
+    warn "No DOMAIN set — webhook NOT configured"
 fi
 
-log "Setup complete. supervisord=$SUPER_PID mysql=$MYSQL_PID"
-
-# Keep container alive — wait for supervisord
-wait $SUPER_PID
+# ═══ PHASE 3: Start supervisord (manages nginx + php-fpm + mariadb) ═══
+log "Starting supervisord..."
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
